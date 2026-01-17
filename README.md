@@ -280,7 +280,7 @@ Key-Stoker/
 ## Tool Preview
 
 <p align="center">
-  <img src="Images/preview.png" alt="Tool Preview" width="520" style="border-radius:12px;"/>
+  <img src="Images/preview.png" alt="Tool Preview" width="" style="border-radius:12px;"/>
 </p>
 
 ## Tech Stack
