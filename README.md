@@ -312,3 +312,5 @@ Key-Stoker/
 - **Windows** – Full support  
 - **Kali Linux** – Script mode supported (Can modify).
 
+> **🧑‍💻:**  
+> In few days malware  detection will be bypessed and Auto Key-Stokes Share to mail to
